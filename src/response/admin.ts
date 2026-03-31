@@ -1,13 +1,10 @@
 /**
  * Yunzai 插件加载器 — 管理指令（仅限主人使用）
  */
-import { isMaster } from '@src/utils';
 import { EventsEnum, Format, Next, useMessage } from 'alemonjs';
 import { loader } from '../loader';
 
 export default async (e: EventsEnum, next: Next) => {
-  e.IsMaster = e?.IsMaster ?? isMaster(e?.UserId, e?.Platform);
-
   if (!e.IsMaster) {
     next();
 

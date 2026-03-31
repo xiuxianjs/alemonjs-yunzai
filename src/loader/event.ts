@@ -5,7 +5,6 @@
  * 让现有 Yunzai 插件可以直接使用 e.msg / e.reply() / e.sender 等 API。
  */
 import { EventsEnum, Format, useMessage } from 'alemonjs';
-import { isMaster } from '../utils';
 import type { MessageSegment } from './types';
 
 /** 将 segment 写入 AlemonJS Format */
@@ -97,8 +96,6 @@ export function createYunzaiEvent(event: EventsEnum) {
     self_id: event.BotId ?? '',
     bot: (globalThis as any).Bot ?? {},
 
-    // ── 权限 ──
-    isMaster: event.IsMaster ?? isMaster(event.UserId, event.Platform),
 
     // ── 平台 ──
     platform: event.Platform || '',
