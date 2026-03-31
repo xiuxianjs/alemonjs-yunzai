@@ -49,6 +49,8 @@ export default async (e: EventsEnum, next: Next) => {
 
         reply(lines.join('\n'));
       }
+    } else if (cmd === '帮助') {
+      reply('#yzp状态 — 查看插件及优先级\n#yzp重载 — 重新加载插件\n#yzp插件列表 — 查看插件名称\n#yzp帮助 — 查看本帮助');
     } else {
       next();
     }

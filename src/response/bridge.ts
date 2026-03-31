@@ -8,13 +8,13 @@ import { EventsEnum, Next } from 'alemonjs';
 import { loader } from '../loader';
 import { createYunzaiEvent } from '../loader/event';
 
-export default async (e: EventsEnum, next: Next) => {
+export default (e: EventsEnum, next: Next) => {
   e.IsMaster = e?.IsMaster ?? isMaster(e?.UserId, e?.Platform);
 
   const yunzaiEvent = createYunzaiEvent(e);
-  const handled = await loader.deal(yunzaiEvent);
 
-  if (!handled) {
-    next();
-  }
+  void loader.deal(yunzaiEvent);
+
+  // 不阻塞后续路由，允许其他插件继续处理
+  next();
 };

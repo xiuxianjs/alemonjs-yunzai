@@ -1,8 +1,14 @@
 # 阿柠檬-Yunzai翻译器
 
-这是一个 AlemonJS 中间件，它可以加载 Yunzai 风格的插件（不依赖完整的 Miao-Yunzai 运行时），让开发者最快利用 AlemonJS 而无需过多改动代码。
+这是一个 AlemonJS 到插件包，它可以加载 Yunzai 风格的插件（不依赖完整的 Miao-Yunzai 运行时）
 
-## 安装方式1: Git
+什么人适合用这个仓库？
+
+- 立即快速兼容的开发者。
+
+- 追求功能简洁性的朋友。
+
+## 安装说明
 
 ### alemongo/alemondesk
 
@@ -18,22 +24,20 @@ https://github.com/xiuxianjs/alemonjs-load-yunzai.git
 release
 ```
 
-## 安装方式2: npm
+### 对于其他插件
 
-```sh
-yarn add alemonjs-yunzai -W
-```
-
-- alemon.config.yaml
-
-```yaml
-apps:
-  alemonjs-yunzai: true # 启动扩展
-```
+branch 选择 `main` 或 `master`，而不是 `release`, 对于一般的Yunzai插件来说
 
 ## 管理指令
 
-所有管理指令⚠️`仅限主人使用`，前缀支持 `#yzp` 或 `#云崽p`（同时支持 `!` `/` `！` `＃`），使用 `#yzp帮助`、`#yzp插件帮助` 和 `#yzp插件说明<别名>` 了解基本使用。
+所有管理指令⚠️`仅限主人使用`，前缀支持 `#yzp` 或 `#云崽p`（同时支持 `!` `/` `！` `＃`）。
+
+| 指令           | 说明                     |
+| -------------- | ------------------------ |
+| `#yzp状态`     | 查看已加载的插件及优先级 |
+| `#yzp重载`     | 重新扫描并加载所有插件   |
+| `#yzp插件列表` | 查看已加载的插件名称     |
+| `#yzp帮助`     | 查看帮助信息             |
 
 - alemon.config.yaml 新增 master_key
 
@@ -45,22 +49,7 @@ master_key:
   - abcdefg
 ```
 
-- 安装一般操作步骤
-
-`#yzp安装` → `#yzp安装插件miao` → `#yzp安装依赖` → `#yzp启动`
-
-## 配置项
-
-在 `alemon.config.yaml` 中配置：
-
-```yaml
-# https://alemonjs.com/docs/config
-# 主人权限（必填，否则管理指令不可用）
-master_key:
-  - abcdefg
-```
-
-## 开发者
+## 对于开发者
 
 ```ts
 import { YunzaiPlugin, segment, loader, createYunzaiEvent } from 'alemonjs-yunzai';

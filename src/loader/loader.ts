@@ -194,12 +194,12 @@ export class PluginLoader {
    *  8. export const/let/var apps              — 直接声明导出 apps
    */
   private static YUNZAI_PATTERNS: RegExp[] = [
-    /extends\s+plugin\b/,                              // class Xxx extends plugin
-    /export\s*\{[^}]*\bapps\b[^}]*\}/,                // export { apps } / export { rules as apps }
-    /export\s+\*\s+from\s/,                            // export * from '...'
-    /import\s+plugin\s+from\s/,                        // import plugin from '../../lib/plugins/plugin.js'
-    /export\s+(default\s+)?class\s+\w+\s+extends\s/,   // export (default) class Xxx extends ...
-    /export\s+(const|let|var)\s+apps\b/,               // export const apps = ...
+    /extends\s+plugin\b/, // class Xxx extends plugin
+    /export\s*\{[^}]*\bapps\b[^}]*\}/, // export { apps } / export { rules as apps }
+    /export\s+\*\s+from\s/, // export * from '...'
+    /import\s+plugin\s+from\s/, // import plugin from '../../lib/plugins/plugin.js'
+    /export\s+(default\s+)?class\s+\w+\s+extends\s/, // export (default) class Xxx extends ...
+    /export\s+(const|let|var)\s+apps\b/ // export const apps = ...
   ];
 
   /** 判断文件是否可能是 Yunzai 风格插件 */
