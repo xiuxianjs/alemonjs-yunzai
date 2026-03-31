@@ -111,11 +111,13 @@ export class PluginLoader {
         keys: (pattern: string) => {
           const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
 
-          return Promise.resolve([...store.keys()].filter(k => {
-            cleanup(k);
+          return Promise.resolve(
+            [...store.keys()].filter(k => {
+              cleanup(k);
 
-            return store.has(k) && regex.test(k);
-          }));
+              return store.has(k) && regex.test(k);
+            })
+          );
         },
         incr: (key: string) => {
           cleanup(key);
@@ -319,11 +321,7 @@ export class PluginLoader {
     const proto = val.prototype;
 
     if (proto && typeof proto.constructor === 'function') {
-      return (
-        Array.isArray(proto.rule) ||
-        typeof proto.reply === 'function' ||
-        ('name' in proto && 'rule' in proto)
-      );
+      return Array.isArray(proto.rule) || typeof proto.reply === 'function' || ('name' in proto && 'rule' in proto);
     }
 
     return false;
@@ -368,6 +366,11 @@ export class PluginLoader {
       try {
         const instance = new entry.cls();
 
+        // 事件类型过滤: 插件声明的 event 需匹配 e.post_type
+        if (!this.matchEvent(instance.event ?? 'message', e)) {
+          continue;
+        }
+
         instance.e = e;
 
         // accept() 全局拦截
@@ -383,7 +386,11 @@ export class PluginLoader {
           }
         }
 
-        // 规则匹配
+        // 规则匹配 (非消息事件跳过正则匹配)
+        if (e.post_type !== 'message') {
+          continue;
+        }
+
         for (const rule of instance.rule ?? []) {
           const reg = rule.reg instanceof RegExp ? rule.reg : new RegExp(rule.reg);
 
@@ -429,6 +436,48 @@ export class PluginLoader {
   async reload() {
     this.priority = [];
     await this.load();
+  }
+
+  /**
+   * 判断插件声明的 event 是否匹配当前事件
+   *
+   * 支持格式:
+   * - 'message'                → e.post_type === 'message'
+   * - 'notice'                 → e.post_type === 'notice'
+   * - 'notice.group_increase'  → notice_type === 'group_increase'
+   * - 'notice.notify.poke'     → notice_type === 'notify' && sub_type === 'poke'
+   * - 'request'                → e.post_type === 'request'
+   */
+  private matchEvent(pluginEvent: string, e: any): boolean {
+    if (!pluginEvent) {
+      return true;
+    }
+
+    const parts = pluginEvent.split('.');
+    const postType = parts[0]; // 'message' | 'notice' | 'request'
+
+    if (e.post_type !== postType) {
+      return false;
+    }
+
+    // 只匹配 post_type (如 'message' / 'notice')
+    if (parts.length === 1) {
+      return true;
+    }
+
+    // 匹配子类型 (如 'notice.group_increase')
+    const subTypeField = postType === 'request' ? e.request_type : e.notice_type;
+
+    if (parts[1] && subTypeField !== parts[1]) {
+      return false;
+    }
+
+    // 匹配更细粒度 (如 'notice.notify.poke')
+    if (parts.length >= 3 && parts[2] && e.sub_type !== parts[2]) {
+      return false;
+    }
+
+    return true;
   }
 
   /** 获取插件列表 */
