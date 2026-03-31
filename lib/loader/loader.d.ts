@@ -13,6 +13,7 @@ export declare class PluginLoader {
     private isPluginClass;
     deal(e: any): Promise<boolean>;
     reload(): Promise<void>;
+    private matchEvent;
     getPluginList(): {
         name: string;
         priority: number;
