@@ -15,7 +15,7 @@
 - 地址
 
 ```sh
-https://github.com/xiuxianjs/alemonjs-load-yunzai.git
+https://github.com/xiuxianjs/alemonjs-yunzai.git
 ```
 
 - branch
