@@ -28,12 +28,50 @@ function appendSegmentToFormat(format: any, seg: MessageSegment) {
     case 'face':
       format.addText(`[表情${seg.data}]`);
       break;
+    case 'button':
+      // 按钮降级为文本提示
+      if (seg.buttons?.length) {
+        const labels = seg.buttons.map((b: any) => b.text).join(' | ');
+
+        format.addText(`[${labels}]`);
+      }
+
+      break;
     default:
       if (seg.text) {
         format.addText(seg.text);
       }
       break;
   }
+}
+
+/**
+ * 转发消息降级处理
+ *
+ * 将 QQ 协议的 forwardMsg 数组转为纯文本拼接，
+ * 供 e.group.makeForwardMsg / e.friend.makeForwardMsg 使用。
+ */
+function makeForwardMsgFallback(msgArr: any[]): string {
+  const parts: string[] = [];
+
+  for (const item of msgArr) {
+    if (typeof item === 'string') {
+      parts.push(item);
+    } else if (item?.message) {
+      if (typeof item.message === 'string') {
+        parts.push(item.message);
+      } else if (Array.isArray(item.message)) {
+        parts.push(
+          item.message
+            .filter((s: any) => s.type === 'text')
+            .map((s: any) => s.text ?? '')
+            .join('')
+        );
+      }
+    }
+  }
+
+  return parts.join('\n────────\n');
 }
 
 /** 将 Yunzai reply 内容发送到 AlemonJS */
@@ -142,14 +180,24 @@ export function createYunzaiEvent(event: EventsEnum) {
     at: '',
     atBot: false,
     file: null,
+    source: null as any,
 
     // ── 日志 ──
     logFnc: '',
+
+    // ── 保留原始消息 (插件可能 e.original_msg || e.msg) ──
+    original_msg: msgText,
+
+    // ── 群名 ──
+    group_name: '',
 
     // ── 游戏标记 (插件可能用到) ──
     game: '',
     isSr: false,
     isGs: false,
+
+    // ── toString ──
+    toString: () => msgText,
 
     // ── reply 函数 ──
     reply: (msg: any, _quote = false, _data: any = {}) => {
@@ -159,6 +207,101 @@ export function createYunzaiEvent(event: EventsEnum) {
     // ── 原始 AlemonJS 事件 (逃生口) ──
     _alemonEvent: event,
     _alemonMessage: message
+  };
+
+  // ── 群/好友对象 (提供 makeForwardMsg 等 API) ──
+  if (isGroup) {
+    e.group = {
+      group_id: groupId,
+      name: '',
+      is_owner: false,
+      is_admin: false,
+      sendMsg: (msg: any) => sendReply(message, msg),
+      makeForwardMsg: (msgArr: any[]) => Promise.resolve(makeForwardMsgFallback(msgArr)),
+      recallMsg: () => Promise.resolve(true),
+      pickMember: (uid: string) => ({
+        info: { user_id: uid, card: '', nickname: '' },
+        getAvatarUrl: () => Promise.resolve('')
+      }),
+      getMemberMap: () => Promise.resolve(new Map()),
+      getChatHistory: (_seq?: number, _count?: number) => Promise.resolve([]),
+      sendFile: (_filePath: string) => {
+        console.warn('[yunzai-loader] e.group.sendFile 暂不支持');
+
+        return Promise.resolve(false);
+      },
+      getFileUrl: (_fid: string) => {
+        console.warn('[yunzai-loader] e.group.getFileUrl 暂不支持');
+
+        return Promise.resolve('');
+      },
+      quit: () => {
+        console.warn('[yunzai-loader] e.group.quit 暂不支持');
+
+        return Promise.resolve(false);
+      },
+      setCard: (_uid: string, _card: string) => Promise.resolve(true),
+      muteMember: (_uid: string, _duration: number) => Promise.resolve(true),
+      kickMember: (_uid: string) => Promise.resolve(true)
+    };
+  }
+
+  e.friend = {
+    user_id: userId,
+    nickname: userName,
+    sendMsg: (msg: any) => sendReply(message, msg),
+    makeForwardMsg: (msgArr: any[]) => Promise.resolve(makeForwardMsgFallback(msgArr)),
+    recallMsg: () => Promise.resolve(true),
+    getChatHistory: (_time?: number, _count?: number) => Promise.resolve([]),
+    sendFile: (_filePath: string) => {
+      console.warn('[yunzai-loader] e.friend.sendFile 暂不支持');
+
+      return Promise.resolve(false);
+    },
+    getAvatarUrl: () => Promise.resolve('')
+  };
+
+  // ── e.member (消息事件也可能被访问) ──
+  e.member = {
+    user_id: userId,
+    card: userName,
+    nickname: userName,
+    role: 'member',
+    is_admin: false,
+    is_owner: false,
+    _info: { card: userName, nickname: userName },
+    getAvatarUrl: () => Promise.resolve('')
+  };
+
+  // ── e.runtime (渲染器接口桩) ──
+  e.runtime = {
+    render: async (plugin: string, tpl: string, data: any = {}, cfg: any = {}) => {
+      try {
+        const pup = (globalThis as any).puppeteer ?? (await import('../puppeteer/puppeteer')).default;
+
+        if (pup?.screenshot) {
+          const img = await pup.screenshot(`${plugin}/${tpl}`, { ...data, ...cfg });
+
+          if (cfg?.retType === 'base64') {
+            return img;
+          }
+
+          if (img) {
+            await e.reply(img);
+          }
+
+          return img;
+        }
+      } catch (err: any) {
+        console.error('[yunzai-loader] runtime.render 失败:', err.message);
+      }
+
+      return false;
+    },
+    getUid: () => e.user_id,
+    handler: null,
+    user: null,
+    cfg: (globalThis as any).cfg ?? {}
   };
 
   // ── 按事件类型填充分类字段 ──
@@ -178,7 +321,8 @@ export function createYunzaiEvent(event: EventsEnum) {
       role: 'member',
       is_admin: false,
       is_owner: false,
-      _info: { card: userName, nickname: userName }
+      _info: { card: userName, nickname: userName },
+      getAvatarUrl: () => Promise.resolve('')
     };
   } else if (requestInfo) {
     e.post_type = 'request';

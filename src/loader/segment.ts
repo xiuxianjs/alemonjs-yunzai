@@ -3,7 +3,7 @@
  *
  * 提供与 icqq segment 相同的消息构建 API
  */
-import type { MessageSegment } from './types';
+import type { ButtonItem, MessageSegment } from './types';
 
 export const segment = {
   /** 纯文本 */
@@ -48,5 +48,10 @@ export const segment = {
   /** XML 卡片 */
   xml(data: string): MessageSegment {
     return { type: 'xml', data };
+  },
+
+  /** 交互按钮 */
+  button(buttons: ButtonItem[]): MessageSegment {
+    return { type: 'button', buttons };
   }
 };

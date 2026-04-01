@@ -40,11 +40,20 @@ export interface PluginEntry {
 
 /** segment 消息元素 */
 export interface MessageSegment {
-  type: 'text' | 'image' | 'at' | 'face' | 'record' | 'video' | 'file' | 'json' | 'xml';
+  type: 'text' | 'image' | 'at' | 'face' | 'record' | 'video' | 'file' | 'json' | 'xml' | 'button';
   text?: string;
   qq?: string | number;
   url?: string;
   file?: string | Buffer;
   data?: any;
+  buttons?: ButtonItem[];
   [key: string]: any;
+}
+
+/** 按钮元素 */
+export interface ButtonItem {
+  text: string;
+  input?: string;
+  callback?: string;
+  link?: string;
 }

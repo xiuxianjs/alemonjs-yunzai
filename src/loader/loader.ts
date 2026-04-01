@@ -19,6 +19,41 @@ import { findContext, YunzaiPlugin } from './plugin';
 import { segment } from './segment';
 import type { PluginEntry } from './types';
 
+/** 简易 cron 解析器：支持 "秒 分 时 日 月 周" 六段 cron */
+function parseCron(cron: string): { interval: number } | null {
+  if (!cron) {
+    return null;
+  }
+
+  const parts = cron.trim().split(/\s+/);
+
+  // 仅处理最常见的固定间隔格式
+  // */N * * * * * → 每 N 秒
+  // 0 */N * * * * → 每 N 分钟
+  // 0 0 */N * * * → 每 N 小时
+  if (parts.length >= 5) {
+    // 尝试找 */N 模式
+    for (let i = 0; i < Math.min(parts.length, 3); i++) {
+      const m = parts[i].match(/^\*\/(\d+)$/);
+
+      if (m) {
+        const n = parseInt(m[1]);
+        const multipliers = [1000, 60000, 3600000]; // 秒/分/时
+
+        return { interval: n * multipliers[i] };
+      }
+    }
+
+    // 固定时刻 (如 "0 30 8 * * *")：每天执行
+    return { interval: 86400000 };
+  }
+
+  return null;
+}
+
+/** 已注册的定时任务 */
+const taskTimers: ReturnType<typeof setInterval>[] = [];
+
 export class PluginLoader {
   /** 按优先级排序的插件队列 */
   priority: PluginEntry[] = [];
@@ -36,7 +71,7 @@ export class PluginLoader {
 
   // ─── 全局变量注入 ───
 
-  setupGlobals() {
+  async setupGlobals() {
     const g = globalThis as any;
 
     // plugin 基类
@@ -45,8 +80,34 @@ export class PluginLoader {
     // segment 消息构建
     g.segment = segment;
 
-    // logger (复用 AlemonJS logger)
+    // logger (复用 AlemonJS logger + 添加颜色方法)
     g.logger ??= logger;
+
+    // 兼容 Miao-Yunzai logger 颜色方法
+    if (g.logger && !g.logger.red) {
+      try {
+        const chalk = (await import('chalk')).default;
+
+        g.logger.chalk = chalk;
+        g.logger.red = chalk.red;
+        g.logger.green = chalk.green;
+        g.logger.yellow = chalk.yellow;
+        g.logger.blue = chalk.blue;
+        g.logger.magenta = chalk.magenta;
+        g.logger.cyan = chalk.cyan;
+      } catch {
+        // chalk 未安装，提供无颜色降级
+        const identity = (s: any) => s;
+
+        g.logger.chalk = identity;
+        g.logger.red = identity;
+        g.logger.green = identity;
+        g.logger.yellow = identity;
+        g.logger.blue = identity;
+        g.logger.magenta = identity;
+        g.logger.cyan = identity;
+      }
+    }
 
     // Bot 桩对象 (插件可能引用 Bot.uin 等)
     g.Bot ??= {
@@ -60,19 +121,54 @@ export class PluginLoader {
         recv_msg_cnt: 0,
         sent_msg_cnt: 0
       },
-      pickUser: () => ({ sendMsg: () => Promise.resolve({}) }),
-      pickGroup: () => ({
+      pickUser: (uid: any) => ({
+        user_id: uid,
         sendMsg: () => Promise.resolve({}),
-        pickMember: () => ({ info: {} })
+        getAvatarUrl: () => Promise.resolve('')
       }),
-      pickFriend: () => ({ sendMsg: () => Promise.resolve({}) }),
+      pickGroup: (gid: any) => ({
+        group_id: gid,
+        name: '',
+        is_owner: false,
+        is_admin: false,
+        sendMsg: () => Promise.resolve({}),
+        pickMember: (uid: any) => ({
+          info: { user_id: uid, card: '', nickname: '' },
+          getAvatarUrl: () => Promise.resolve('')
+        }),
+        getMemberMap: () => Promise.resolve(new Map()),
+        getChatHistory: () => Promise.resolve([]),
+        makeForwardMsg: (arr: any[]) => Promise.resolve(arr),
+        recallMsg: () => Promise.resolve(true),
+        sendFile: () => Promise.resolve(false),
+        getFileUrl: () => Promise.resolve(''),
+        quit: () => Promise.resolve(false),
+        setCard: () => Promise.resolve(true),
+        muteMember: () => Promise.resolve(true),
+        kickMember: () => Promise.resolve(true)
+      }),
+      pickFriend: (uid: any) => ({
+        user_id: uid,
+        sendMsg: () => Promise.resolve({}),
+        getAvatarUrl: () => Promise.resolve(''),
+        getChatHistory: () => Promise.resolve([]),
+        sendFile: () => Promise.resolve(false),
+        makeForwardMsg: (arr: any[]) => Promise.resolve(arr),
+        recallMsg: () => Promise.resolve(true)
+      }),
       sendGroupMsg: () => Promise.resolve({}),
-      sendPrivateMsg: () => Promise.resolve({})
+      sendPrivateMsg: () => Promise.resolve({}),
+      getGroupMemberInfo: (_gid: any, _uid: any) => Promise.resolve({ user_id: _uid, card: '', nickname: '', role: 'member' }),
+      getGroupMemberList: (_gid: any) => Promise.resolve([]),
+      getGroupInfo: (_gid: any) => Promise.resolve({ group_id: _gid, group_name: '' }),
+      getFriendList: () => Promise.resolve([])
     };
 
     // Redis 内存兜底 (无 Redis 时也能跑)
     if (!g.redis) {
       const store = new Map<string, { value: string; expireAt?: number }>();
+      const hashStore = new Map<string, Map<string, string>>();
+      const sortedSetStore = new Map<string, { value: string; score: number }[]>();
 
       const cleanup = (key: string) => {
         const item = store.get(key);
@@ -87,6 +183,7 @@ export class PluginLoader {
       };
 
       g.redis = {
+        // ─── String 操作 ───
         get: (key: string) => {
           cleanup(key);
 
@@ -105,17 +202,20 @@ export class PluginLoader {
         },
         del: (key: string) => {
           store.delete(key);
+          hashStore.delete(key);
+          sortedSetStore.delete(key);
 
           return Promise.resolve(1);
         },
         keys: (pattern: string) => {
           const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          const allKeys = new Set([...store.keys(), ...hashStore.keys(), ...sortedSetStore.keys()]);
 
           return Promise.resolve(
-            [...store.keys()].filter(k => {
+            [...allKeys].filter(k => {
               cleanup(k);
 
-              return store.has(k) && regex.test(k);
+              return (store.has(k) || hashStore.has(k) || sortedSetStore.has(k)) && regex.test(k);
             })
           );
         },
@@ -131,21 +231,266 @@ export class PluginLoader {
         exists: (key: string) => {
           cleanup(key);
 
-          return Promise.resolve(store.has(key) ? 1 : 0);
+          return Promise.resolve(store.has(key) || hashStore.has(key) || sortedSetStore.has(key) ? 1 : 0);
         },
         setEx: (key: string, ttl: number, val: string) => {
           store.set(key, { value: val, expireAt: Date.now() + ttl * 1000 });
 
           return Promise.resolve('OK');
+        },
+
+        // ─── Hash 操作 ───
+        hGet: (key: string, field: string) => {
+          return Promise.resolve(hashStore.get(key)?.get(field) ?? null);
+        },
+        hSet: (key: string, field: string, value: string) => {
+          if (!hashStore.has(key)) {
+            hashStore.set(key, new Map());
+          }
+
+          hashStore.get(key)!.set(field, value);
+
+          return Promise.resolve(1);
+        },
+        hDel: (key: string, ...fields: string[]) => {
+          const hash = hashStore.get(key);
+
+          if (!hash) {
+            return Promise.resolve(0);
+          }
+
+          let count = 0;
+
+          for (const f of fields) {
+            if (hash.delete(f)) {
+              count++;
+            }
+          }
+
+          return Promise.resolve(count);
+        },
+        hGetAll: (key: string) => {
+          const hash = hashStore.get(key);
+
+          if (!hash) {
+            return Promise.resolve({});
+          }
+
+          const result: Record<string, string> = {};
+
+          for (const [k, v] of hash) {
+            result[k] = v;
+          }
+
+          return Promise.resolve(result);
+        },
+
+        // ─── Sorted Set 操作 ───
+        zAdd: (key: string, ...args: any[]) => {
+          if (!sortedSetStore.has(key)) {
+            sortedSetStore.set(key, []);
+          }
+
+          const arr = sortedSetStore.get(key)!;
+
+          // 支持 zAdd(key, {score, value}) 和 zAdd(key, score, value)
+          for (let i = 0; i < args.length; i++) {
+            let score: number;
+            let value: string;
+
+            if (typeof args[i] === 'object' && args[i] !== null) {
+              score = args[i].score;
+              value = args[i].value;
+            } else {
+              score = Number(args[i]);
+              value = String(args[++i]);
+            }
+
+            const idx = arr.findIndex(e => e.value === value);
+
+            if (idx >= 0) {
+              arr[idx].score = score;
+            } else {
+              arr.push({ value, score });
+            }
+          }
+
+          arr.sort((a, b) => a.score - b.score);
+
+          return Promise.resolve(1);
+        },
+        zScore: (key: string, member: string) => {
+          const entry = sortedSetStore.get(key)?.find(e => e.value === member);
+
+          return Promise.resolve(entry ? entry.score : null);
+        },
+        zRange: (key: string, start: number, stop: number) => {
+          const arr = sortedSetStore.get(key) ?? [];
+          const len = arr.length;
+          const s = start < 0 ? Math.max(0, len + start) : start;
+          const e = stop < 0 ? len + stop : stop;
+
+          return Promise.resolve(arr.slice(s, e + 1).map(x => x.value));
+        },
+        zRangeWithScores: (key: string, start: number, stop: number) => {
+          const arr = sortedSetStore.get(key) ?? [];
+          const len = arr.length;
+          const s = start < 0 ? Math.max(0, len + start) : start;
+          const e = stop < 0 ? len + stop : stop;
+
+          return Promise.resolve(arr.slice(s, e + 1));
+        },
+        zRevRange: (key: string, start: number, stop: number) => {
+          const arr = [...(sortedSetStore.get(key) ?? [])].reverse();
+          const len = arr.length;
+          const s = start < 0 ? Math.max(0, len + start) : start;
+          const e = stop < 0 ? len + stop : stop;
+
+          return Promise.resolve(arr.slice(s, e + 1).map(x => x.value));
+        },
+        zRevRank: (key: string, member: string) => {
+          const arr = sortedSetStore.get(key) ?? [];
+          const reversed = [...arr].reverse();
+          const idx = reversed.findIndex(e => e.value === member);
+
+          return Promise.resolve(idx >= 0 ? idx : null);
+        },
+        zRem: (key: string, ...members: string[]) => {
+          const arr = sortedSetStore.get(key);
+
+          if (!arr) {
+            return Promise.resolve(0);
+          }
+
+          let removed = 0;
+
+          for (const m of members) {
+            const idx = arr.findIndex(e => e.value === m);
+
+            if (idx >= 0) {
+              arr.splice(idx, 1);
+              removed++;
+            }
+          }
+
+          return Promise.resolve(removed);
+        },
+        zCard: (key: string) => {
+          return Promise.resolve(sortedSetStore.get(key)?.length ?? 0);
+        },
+        zRangeByScore: (key: string, min: number | string, max: number | string) => {
+          const arr = sortedSetStore.get(key) ?? [];
+          const lo = min === '-inf' ? -Infinity : Number(min);
+          const hi = max === '+inf' ? Infinity : Number(max);
+
+          return Promise.resolve(arr.filter(e => e.score >= lo && e.score <= hi).map(e => e.value));
+        },
+        zRangeByScoreWithScores: (key: string, min: number | string, max: number | string) => {
+          const arr = sortedSetStore.get(key) ?? [];
+          const lo = min === '-inf' ? -Infinity : Number(min);
+          const hi = max === '+inf' ? Infinity : Number(max);
+
+          return Promise.resolve(arr.filter(e => e.score >= lo && e.score <= hi));
+        },
+        zRemRangeByScore: (key: string, min: number | string, max: number | string) => {
+          const arr = sortedSetStore.get(key);
+
+          if (!arr) {
+            return Promise.resolve(0);
+          }
+
+          const lo = min === '-inf' ? -Infinity : Number(min);
+          const hi = max === '+inf' ? Infinity : Number(max);
+          const before = arr.length;
+          const filtered = arr.filter(e => e.score < lo || e.score > hi);
+
+          sortedSetStore.set(key, filtered);
+
+          return Promise.resolve(before - filtered.length);
+        },
+
+        // ─── List 操作 ───
+        lPush: (key: string, ...values: string[]) => {
+          if (!store.has(key)) {
+            store.set(key, { value: JSON.stringify([]) });
+          }
+
+          const list: string[] = JSON.parse(store.get(key)!.value);
+
+          list.unshift(...values);
+          store.set(key, { value: JSON.stringify(list) });
+
+          return Promise.resolve(list.length);
+        },
+        lRange: (key: string, start: number, stop: number) => {
+          if (!store.has(key)) {
+            return Promise.resolve([]);
+          }
+
+          const list: string[] = JSON.parse(store.get(key)!.value);
+          const s = start < 0 ? Math.max(0, list.length + start) : start;
+          const e = stop < 0 ? list.length + stop : stop;
+
+          return Promise.resolve(list.slice(s, e + 1));
+        },
+
+        // ─── Set 操作 ───
+        sAdd: (key: string, ...members: string[]) => {
+          if (!store.has(key)) {
+            store.set(key, { value: JSON.stringify([]) });
+          }
+
+          const set: string[] = JSON.parse(store.get(key)!.value);
+          let added = 0;
+
+          for (const m of members) {
+            if (!set.includes(m)) {
+              set.push(m);
+              added++;
+            }
+          }
+
+          store.set(key, { value: JSON.stringify(set) });
+
+          return Promise.resolve(added);
+        },
+        sMembers: (key: string) => {
+          if (!store.has(key)) {
+            return Promise.resolve([]);
+          }
+
+          return Promise.resolve(JSON.parse(store.get(key)!.value));
         }
       };
+    }
+
+    // cfg 配置对象
+    if (!g.cfg) {
+      try {
+        const { default: cfg } = await import('../config/config');
+
+        g.cfg = cfg;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // common 工具函数
+    if (!g.common) {
+      try {
+        const { default: common } = await import('../common/common');
+
+        g.common = common;
+      } catch {
+        /* ignore */
+      }
     }
   }
 
   // ─── 插件发现与加载 ───
 
   async load() {
-    this.setupGlobals();
+    await this.setupGlobals();
     this.priority = [];
 
     if (!existsSync(this.pluginsDir)) {
@@ -178,6 +523,9 @@ export class PluginLoader {
 
     // 按优先级升序排列
     this.priority.sort((a, b) => a.priority - b.priority);
+
+    // 收集并注册定时任务
+    this.collectTasks();
 
     logger.info(`[yunzai-loader] 共加载 ${this.priority.length} 个插件类`);
   }
@@ -434,8 +782,65 @@ export class PluginLoader {
 
   /** 重新加载所有插件 */
   async reload() {
+    this.clearTasks();
     this.priority = [];
     await this.load();
+  }
+
+  /** 收集并注册定时任务 */
+  private collectTasks() {
+    for (const entry of this.priority) {
+      try {
+        const instance = new entry.cls();
+        const tasks = Array.isArray(instance.task) ? instance.task : [instance.task];
+
+        for (const task of tasks) {
+          if (!task?.cron || !task?.fnc) {
+            continue;
+          }
+
+          const fnc = task.fnc;
+          const parsed = parseCron(task.cron);
+
+          if (!parsed) {
+            logger.warn(`[yunzai-loader] 无法解析 cron: ${task.cron} (${entry.name}.${fnc})`);
+            continue;
+          }
+
+          const timer = setInterval(() => {
+            try {
+              const inst = new entry.cls();
+
+              if (typeof inst[fnc] === 'function') {
+                if (task.log !== false) {
+                  logger.info(`[yunzai-loader] [定时任务] ${entry.name}.${fnc}`);
+                }
+
+                void Promise.resolve(inst[fnc]()).catch((err: any) => {
+                  logger.error(`[yunzai-loader] 定时任务 ${entry.name}.${fnc} 失败: ${err.message}`);
+                });
+              }
+            } catch (err: any) {
+              logger.error(`[yunzai-loader] 定时任务 ${entry.name}.${fnc} 失败: ${err.message}`);
+            }
+          }, parsed.interval);
+
+          taskTimers.push(timer);
+          logger.info(`[yunzai-loader]   ├─ 定时任务 ${entry.name}.${fnc} (${task.cron})`);
+        }
+      } catch {
+        /* skip */
+      }
+    }
+  }
+
+  /** 清除所有定时任务 */
+  private clearTasks() {
+    for (const timer of taskTimers) {
+      clearInterval(timer);
+    }
+
+    taskTimers.length = 0;
   }
 
   /**
