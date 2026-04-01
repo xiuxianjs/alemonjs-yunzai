@@ -1,6 +1,22 @@
 import type { PluginEntry } from './types';
+interface CompiledRule {
+    reg: RegExp;
+    fnc: string;
+    permission?: string;
+    log?: boolean;
+}
+interface LoadedPlugin extends PluginEntry {
+    eventParts: string[];
+    compiledRules: CompiledRule[];
+    hasAccept: boolean;
+    tasks: {
+        cron: string;
+        fnc: string;
+        log?: boolean;
+    }[];
+}
 export declare class PluginLoader {
-    priority: PluginEntry[];
+    priority: LoadedPlugin[];
     private pluginsDir;
     constructor(pluginsDir: string);
     get pluginCount(): number;
@@ -15,10 +31,11 @@ export declare class PluginLoader {
     reload(): Promise<void>;
     private collectTasks;
     private clearTasks;
-    private matchEvent;
+    matchEvent(pluginEvent: string, e: any): boolean;
     getPluginList(): {
         name: string;
         priority: number;
         filePath: string;
     }[];
 }
+export {};

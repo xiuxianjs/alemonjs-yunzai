@@ -31,7 +31,7 @@ export declare class YunzaiPlugin {
     awaitContext(...args: any[]): Promise<any>;
     resolveContext(context: any): void;
     makeForwardMsg(title: string, msg?: any, end?: string, resmsg?: string): Promise<any> | string;
-    renderImg(plugin: string, tpl: string, data?: any, cfg?: any): Promise<any>;
+    renderImg(plugin: string, tpl: string, data?: any, cfg?: any): Promise<any> | false;
 }
 export declare function findContext(e: any): {
     pluginName: string;

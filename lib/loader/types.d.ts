@@ -17,7 +17,7 @@ export interface PluginEntry {
     filePath: string;
 }
 export interface MessageSegment {
-    type: 'text' | 'image' | 'at' | 'face' | 'record' | 'video' | 'file' | 'json' | 'xml' | 'button';
+    type: 'text' | 'image' | 'at' | 'face' | 'record' | 'video' | 'file' | 'json' | 'xml' | 'button' | 'share' | 'music' | 'poke';
     text?: string;
     qq?: string | number;
     url?: string;

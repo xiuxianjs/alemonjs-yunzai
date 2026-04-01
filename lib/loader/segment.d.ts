@@ -9,4 +9,7 @@ export declare const segment: {
     json(data: any): MessageSegment;
     xml(data: string): MessageSegment;
     button(buttons: ButtonItem[]): MessageSegment;
+    share(url: string, title?: string, content?: string, image?: string): MessageSegment;
+    music(type: string, id: string | number): MessageSegment;
+    poke(qq: string | number): MessageSegment;
 };
