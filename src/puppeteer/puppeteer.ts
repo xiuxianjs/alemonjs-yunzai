@@ -6,7 +6,6 @@
  *
  */
 import { logger } from 'alemonjs';
-import artTemplate from 'art-template';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -15,6 +14,25 @@ import { segment } from '../loader/segment';
 let browser: any = null;
 let screenshotCount = 0;
 const MAX_SCREENSHOTS = 100;
+let activePages = 0;
+const MAX_CONCURRENT_PAGES = 6;
+
+// art-template 懒加载 (未安装时降级)
+let _artTemplate: any;
+
+async function loadArtTemplate() {
+  if (_artTemplate !== undefined) {
+    return _artTemplate;
+  }
+
+  try {
+    _artTemplate = (await import('art-template')).default;
+  } catch {
+    _artTemplate = null;
+  }
+
+  return _artTemplate;
+}
 
 // ─── 浏览器管理 ───
 
@@ -65,15 +83,16 @@ async function closeBrowser() {
 
 // ─── 模板渲染 ───
 
-function renderHtml(tplFile: string, data: Record<string, any>): string {
+async function renderHtml(tplFile: string, data: Record<string, any>): Promise<string> {
   if (!existsSync(tplFile)) {
     throw new Error(`模板文件不存在: ${tplFile}`);
   }
 
   const raw = readFileSync(tplFile, 'utf-8');
+  const artTpl = await loadArtTemplate();
 
-  if (artTemplate) {
-    return artTemplate.render(raw, { resPath: './resources/', ...data });
+  if (artTpl) {
+    return artTpl.render(raw, { resPath: './resources/', ...data });
   }
 
   logger.warn('[puppeteer] art-template 未安装，使用简单替换。建议: npm i art-template');
@@ -121,7 +140,7 @@ async function screenshot(name: string, data: any = {}): Promise<any> {
 
   try {
     // 1. 渲染模板
-    const html = renderHtml(tplFile, data);
+    const html = await renderHtml(tplFile, data);
     const savedPath = saveRenderedHtml(name, saveId, html);
     const fileUrl = pathToFileURL(savedPath).href;
 
@@ -132,6 +151,14 @@ async function screenshot(name: string, data: any = {}): Promise<any> {
       return false;
     }
 
+    // 并发页面数限制
+    if (activePages >= MAX_CONCURRENT_PAGES) {
+      logger.warn('[puppeteer] 并发页面数已达上限，请稍后重试');
+
+      return false;
+    }
+
+    activePages++;
     const page = await brw.newPage();
 
     try {
@@ -193,6 +220,7 @@ async function screenshot(name: string, data: any = {}): Promise<any> {
       return result.length > 0 ? result : false;
     } finally {
       await page.close();
+      activePages--;
     }
   } catch (err: any) {
     logger.error(`[puppeteer] 截图失败 ${name}: ${err.message}`);

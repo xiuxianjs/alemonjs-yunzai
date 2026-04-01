@@ -53,5 +53,20 @@ export const segment = {
   /** 交互按钮 */
   button(buttons: ButtonItem[]): MessageSegment {
     return { type: 'button', buttons };
+  },
+
+  /** 链接分享 */
+  share(url: string, title = '', content = '', image = ''): MessageSegment {
+    return { type: 'share', data: { url, title, content, image } };
+  },
+
+  /** 音乐分享 */
+  music(type: string, id: string | number): MessageSegment {
+    return { type: 'music', data: { type, id } };
+  },
+
+  /** 戳一戳 */
+  poke(qq: string | number): MessageSegment {
+    return { type: 'poke', qq: String(qq) };
   }
 };

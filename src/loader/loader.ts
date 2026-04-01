@@ -19,6 +19,22 @@ import { findContext, YunzaiPlugin } from './plugin';
 import { segment } from './segment';
 import type { PluginEntry } from './types';
 
+/** 预编译的规则 */
+interface CompiledRule {
+  reg: RegExp;
+  fnc: string;
+  permission?: string;
+  log?: boolean;
+}
+
+/** 加载后的插件条目 (含预编译缓存) */
+interface LoadedPlugin extends PluginEntry {
+  eventParts: string[];
+  compiledRules: CompiledRule[];
+  hasAccept: boolean;
+  tasks: { cron: string; fnc: string; log?: boolean }[];
+}
+
 /** 简易 cron 解析器：支持 "秒 分 时 日 月 周" 六段 cron */
 function parseCron(cron: string): { interval: number } | null {
   if (!cron) {
@@ -56,7 +72,7 @@ const taskTimers: ReturnType<typeof setInterval>[] = [];
 
 export class PluginLoader {
   /** 按优先级排序的插件队列 */
-  priority: PluginEntry[] = [];
+  priority: LoadedPlugin[] = [];
 
   /** 插件目录 */
   private pluginsDir: string;
@@ -169,6 +185,8 @@ export class PluginLoader {
       const store = new Map<string, { value: string; expireAt?: number }>();
       const hashStore = new Map<string, Map<string, string>>();
       const sortedSetStore = new Map<string, { value: string; score: number }[]>();
+      const listStore = new Map<string, string[]>();
+      const setStore = new Map<string, Set<string>>();
 
       const cleanup = (key: string) => {
         const item = store.get(key);
@@ -204,18 +222,20 @@ export class PluginLoader {
           store.delete(key);
           hashStore.delete(key);
           sortedSetStore.delete(key);
+          listStore.delete(key);
+          setStore.delete(key);
 
           return Promise.resolve(1);
         },
         keys: (pattern: string) => {
           const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-          const allKeys = new Set([...store.keys(), ...hashStore.keys(), ...sortedSetStore.keys()]);
+          const allKeys = new Set([...store.keys(), ...hashStore.keys(), ...sortedSetStore.keys(), ...listStore.keys(), ...setStore.keys()]);
 
           return Promise.resolve(
             [...allKeys].filter(k => {
               cleanup(k);
 
-              return (store.has(k) || hashStore.has(k) || sortedSetStore.has(k)) && regex.test(k);
+              return (store.has(k) || hashStore.has(k) || sortedSetStore.has(k) || listStore.has(k) || setStore.has(k)) && regex.test(k);
             })
           );
         },
@@ -231,7 +251,7 @@ export class PluginLoader {
         exists: (key: string) => {
           cleanup(key);
 
-          return Promise.resolve(store.has(key) || hashStore.has(key) || sortedSetStore.has(key) ? 1 : 0);
+          return Promise.resolve(store.has(key) || hashStore.has(key) || sortedSetStore.has(key) || listStore.has(key) || setStore.has(key) ? 1 : 0);
         },
         setEx: (key: string, ttl: number, val: string) => {
           store.set(key, { value: val, expireAt: Date.now() + ttl * 1000 });
@@ -411,23 +431,23 @@ export class PluginLoader {
 
         // ─── List 操作 ───
         lPush: (key: string, ...values: string[]) => {
-          if (!store.has(key)) {
-            store.set(key, { value: JSON.stringify([]) });
+          if (!listStore.has(key)) {
+            listStore.set(key, []);
           }
 
-          const list: string[] = JSON.parse(store.get(key)!.value);
+          const list = listStore.get(key)!;
 
           list.unshift(...values);
-          store.set(key, { value: JSON.stringify(list) });
 
           return Promise.resolve(list.length);
         },
         lRange: (key: string, start: number, stop: number) => {
-          if (!store.has(key)) {
+          const list = listStore.get(key);
+
+          if (!list) {
             return Promise.resolve([]);
           }
 
-          const list: string[] = JSON.parse(store.get(key)!.value);
           const s = start < 0 ? Math.max(0, list.length + start) : start;
           const e = stop < 0 ? list.length + stop : stop;
 
@@ -436,32 +456,43 @@ export class PluginLoader {
 
         // ─── Set 操作 ───
         sAdd: (key: string, ...members: string[]) => {
-          if (!store.has(key)) {
-            store.set(key, { value: JSON.stringify([]) });
+          if (!setStore.has(key)) {
+            setStore.set(key, new Set());
           }
 
-          const set: string[] = JSON.parse(store.get(key)!.value);
+          const set = setStore.get(key)!;
           let added = 0;
 
           for (const m of members) {
-            if (!set.includes(m)) {
-              set.push(m);
+            if (!set.has(m)) {
+              set.add(m);
               added++;
             }
           }
 
-          store.set(key, { value: JSON.stringify(set) });
-
           return Promise.resolve(added);
         },
         sMembers: (key: string) => {
-          if (!store.has(key)) {
+          const set = setStore.get(key);
+
+          if (!set) {
             return Promise.resolve([]);
           }
 
-          return Promise.resolve(JSON.parse(store.get(key)!.value));
+          return Promise.resolve([...set]);
         }
       };
+
+      // TTL 定期清理 (每 60 秒)
+      setInterval(() => {
+        const now = Date.now();
+
+        for (const [key, item] of store) {
+          if (item.expireAt && now > item.expireAt) {
+            store.delete(key);
+          }
+        }
+      }, 60000);
     }
 
     // cfg 配置对象
@@ -640,11 +671,33 @@ export class PluginLoader {
           }
         }
 
+        const eventStr = instance.event ?? 'message';
+        const compiledRules: CompiledRule[] = (instance.rule ?? []).map((r: any) => {
+          let reg: RegExp;
+
+          if (r.reg instanceof RegExp) {
+            // 移除 g/y 标志避免 lastIndex 状态问题
+            reg = r.reg.global || r.reg.sticky ? new RegExp(r.reg.source, r.reg.flags.replace(/[gy]/g, '')) : r.reg;
+          } else {
+            reg = new RegExp(r.reg);
+          }
+
+          return { reg, fnc: r.fnc, permission: r.permission, log: r.log };
+        });
+
+        // 缓存定时任务
+        const rawTasks = Array.isArray(instance.task) ? instance.task : instance.task ? [instance.task] : [];
+        const tasks = rawTasks.filter((t: any) => t?.cron && t?.fnc);
+
         this.priority.push({
           cls: Cls,
           name: instance.name ?? dirName,
           priority: instance.priority ?? 5000,
-          filePath
+          filePath,
+          eventParts: eventStr.split('.'),
+          compiledRules,
+          hasAccept: typeof instance.accept === 'function',
+          tasks
         });
 
         logger.info(`[yunzai-loader]   ├─ ${instance.name} (priority: ${instance.priority})`);
@@ -712,61 +765,71 @@ export class PluginLoader {
     // 2. 遍历插件: accept() → 规则匹配
     for (const entry of this.priority) {
       try {
-        const instance = new entry.cls();
+        // 快速事件类型过滤 (无需实例化，使用预缓存的 eventParts)
+        const ep = entry.eventParts;
 
-        // 事件类型过滤: 插件声明的 event 需匹配 e.post_type
-        if (!this.matchEvent(instance.event ?? 'message', e)) {
+        if (ep[0] && e.post_type !== ep[0]) {
           continue;
         }
 
-        instance.e = e;
+        if (ep[1]) {
+          const field = ep[0] === 'request' ? e.request_type : e.notice_type;
 
-        // accept() 全局拦截
-        if (typeof instance.accept === 'function') {
+          if (field !== ep[1]) {
+            continue;
+          }
+        }
+
+        if (ep[2] && e.sub_type !== ep[2]) {
+          continue;
+        }
+
+        let instance: any = null;
+
+        // accept() 全局拦截 (仅在有 accept 时才实例化)
+        if (entry.hasAccept) {
+          instance = new entry.cls();
+          instance.e = e;
           const acceptResult = await instance.accept(e);
 
-          if (acceptResult === 'return') {
-            return true;
-          }
-
-          if (acceptResult) {
+          if (acceptResult === 'return' || acceptResult) {
             return true;
           }
         }
 
-        // 规则匹配 (非消息事件跳过正则匹配)
-        if (e.post_type !== 'message') {
+        // 规则匹配 (使用预编译正则，非消息事件跳过)
+        if (e.post_type !== 'message' || entry.compiledRules.length === 0) {
           continue;
         }
 
-        for (const rule of instance.rule ?? []) {
-          const reg = rule.reg instanceof RegExp ? rule.reg : new RegExp(rule.reg);
-
-          if (!reg.test(e.msg)) {
+        for (const rule of entry.compiledRules) {
+          if (!rule.reg.test(e.msg)) {
             continue;
           }
 
-          // 权限检查
           if (rule.permission === 'master' && !e.isMaster) {
             continue;
           }
 
-          const fnc = rule.fnc;
+          // 复用 accept 实例或首次创建
+          if (!instance) {
+            instance = new entry.cls();
+            instance.e = e;
+          }
 
-          if (typeof instance[fnc] !== 'function') {
-            logger.warn(`[yunzai-loader] ${entry.name}.${fnc} 不是方法`);
+          if (typeof instance[rule.fnc] !== 'function') {
+            logger.warn(`[yunzai-loader] ${entry.name}.${rule.fnc} 不是方法`);
             continue;
           }
 
-          e.logFnc = `[${entry.name}][${fnc}]`;
+          e.logFnc = `[${entry.name}][${rule.fnc}]`;
 
           if (rule.log !== false) {
             logger.info(`${e.logText} ${e.logFnc} ${e.msg}`);
           }
 
-          const result = await instance[fnc](e);
+          const result = await instance[rule.fnc](e);
 
-          // result !== false 表示已处理
           if (result !== false) {
             return true;
           }
@@ -790,46 +853,35 @@ export class PluginLoader {
   /** 收集并注册定时任务 */
   private collectTasks() {
     for (const entry of this.priority) {
-      try {
-        const instance = new entry.cls();
-        const tasks = Array.isArray(instance.task) ? instance.task : [instance.task];
+      for (const task of entry.tasks) {
+        const fnc = task.fnc;
+        const parsed = parseCron(task.cron);
 
-        for (const task of tasks) {
-          if (!task?.cron || !task?.fnc) {
-            continue;
-          }
-
-          const fnc = task.fnc;
-          const parsed = parseCron(task.cron);
-
-          if (!parsed) {
-            logger.warn(`[yunzai-loader] 无法解析 cron: ${task.cron} (${entry.name}.${fnc})`);
-            continue;
-          }
-
-          const timer = setInterval(() => {
-            try {
-              const inst = new entry.cls();
-
-              if (typeof inst[fnc] === 'function') {
-                if (task.log !== false) {
-                  logger.info(`[yunzai-loader] [定时任务] ${entry.name}.${fnc}`);
-                }
-
-                void Promise.resolve(inst[fnc]()).catch((err: any) => {
-                  logger.error(`[yunzai-loader] 定时任务 ${entry.name}.${fnc} 失败: ${err.message}`);
-                });
-              }
-            } catch (err: any) {
-              logger.error(`[yunzai-loader] 定时任务 ${entry.name}.${fnc} 失败: ${err.message}`);
-            }
-          }, parsed.interval);
-
-          taskTimers.push(timer);
-          logger.info(`[yunzai-loader]   ├─ 定时任务 ${entry.name}.${fnc} (${task.cron})`);
+        if (!parsed) {
+          logger.warn(`[yunzai-loader] 无法解析 cron: ${task.cron} (${entry.name}.${fnc})`);
+          continue;
         }
-      } catch {
-        /* skip */
+
+        const timer = setInterval(() => {
+          try {
+            const inst = new entry.cls();
+
+            if (typeof inst[fnc] === 'function') {
+              if (task.log !== false) {
+                logger.info(`[yunzai-loader] [定时任务] ${entry.name}.${fnc}`);
+              }
+
+              void Promise.resolve(inst[fnc]()).catch((err: any) => {
+                logger.error(`[yunzai-loader] 定时任务 ${entry.name}.${fnc} 失败: ${err.message}`);
+              });
+            }
+          } catch (err: any) {
+            logger.error(`[yunzai-loader] 定时任务 ${entry.name}.${fnc} 失败: ${err.message}`);
+          }
+        }, parsed.interval);
+
+        taskTimers.push(timer);
+        logger.info(`[yunzai-loader]   ├─ 定时任务 ${entry.name}.${fnc} (${task.cron})`);
       }
     }
   }
@@ -853,7 +905,7 @@ export class PluginLoader {
    * - 'notice.notify.poke'     → notice_type === 'notify' && sub_type === 'poke'
    * - 'request'                → e.post_type === 'request'
    */
-  private matchEvent(pluginEvent: string, e: any): boolean {
+  matchEvent(pluginEvent: string, e: any): boolean {
     if (!pluginEvent) {
       return true;
     }

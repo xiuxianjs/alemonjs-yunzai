@@ -101,6 +101,28 @@ async function sendReply(message: any, msg: any) {
   }
 }
 
+/** 延迟创建属性 (首次访问时才构造对象) */
+const NOT_SET = Symbol('NOT_SET');
+
+function defineLazy(obj: any, prop: string, factory: () => any) {
+  let value: any = NOT_SET;
+
+  Object.defineProperty(obj, prop, {
+    get() {
+      if (value === NOT_SET) {
+        value = factory();
+      }
+
+      return value;
+    },
+    set(v: any) {
+      value = v;
+    },
+    configurable: true,
+    enumerable: true
+  });
+}
+
 // ━━━━━━━━━━━━━ 事件类型映射 ━━━━━━━━━━━━━
 
 /** AlemonJS 事件名 → Yunzai post_type + 子类型映射 */
@@ -139,6 +161,44 @@ export function createYunzaiEvent(event: EventsEnum) {
   const userName = event.UserName ?? '';
   const groupId = isGroup ? ((event as any).GuildId ?? '') : undefined;
 
+  // ── 构建 message 段 / 提取媒体 ──
+  const imgs: string[] = [];
+  const messageSegments: any[] = [];
+
+  if (msgText) {
+    messageSegments.push({ type: 'text', text: msgText });
+  }
+
+  const rawMedia: any[] = (event as any).MessageMedia ?? [];
+
+  for (const item of rawMedia) {
+    const url: string = item.Url ?? item.FileId ?? '';
+
+    switch (item.Type) {
+      case 'image':
+        messageSegments.push({ type: 'image', url, file: url });
+
+        if (url) {
+          imgs.push(url);
+        }
+
+        break;
+      case 'audio':
+        messageSegments.push({ type: 'record', file: url });
+        break;
+      case 'video':
+        messageSegments.push({ type: 'video', file: url });
+        break;
+      case 'file':
+        messageSegments.push({ type: 'file', file: url, name: item.FileName ?? '' });
+        break;
+    }
+  }
+
+  if (messageSegments.length === 0) {
+    messageSegments.push({ type: 'text', text: '' });
+  }
+
   // ── 事件分类 ──
   const noticeInfo = EVENT_NOTICE_MAP[eventName];
   const requestInfo = EVENT_REQUEST_MAP[eventName];
@@ -146,7 +206,7 @@ export function createYunzaiEvent(event: EventsEnum) {
   const e: any = {
     // ── 消息内容 ──
     msg: msgText,
-    message: [{ type: 'text', text: msgText }],
+    message: messageSegments,
     raw_message: msgText,
 
     // ── 用户信息 ──
@@ -176,7 +236,7 @@ export function createYunzaiEvent(event: EventsEnum) {
     platform: event.Platform || '',
 
     // ── 媒体 ──
-    img: [] as string[],
+    img: imgs,
     at: '',
     atBot: false,
     file: null,
@@ -209,9 +269,9 @@ export function createYunzaiEvent(event: EventsEnum) {
     _alemonMessage: message
   };
 
-  // ── 群/好友对象 (提供 makeForwardMsg 等 API) ──
+  // ── 群/好友/成员/运行时对象 (延迟创建，首次访问时才构造) ──
   if (isGroup) {
-    e.group = {
+    defineLazy(e, 'group', () => ({
       group_id: groupId,
       name: '',
       is_owner: false,
@@ -243,10 +303,10 @@ export function createYunzaiEvent(event: EventsEnum) {
       setCard: (_uid: string, _card: string) => Promise.resolve(true),
       muteMember: (_uid: string, _duration: number) => Promise.resolve(true),
       kickMember: (_uid: string) => Promise.resolve(true)
-    };
+    }));
   }
 
-  e.friend = {
+  defineLazy(e, 'friend', () => ({
     user_id: userId,
     nickname: userName,
     sendMsg: (msg: any) => sendReply(message, msg),
@@ -259,10 +319,9 @@ export function createYunzaiEvent(event: EventsEnum) {
       return Promise.resolve(false);
     },
     getAvatarUrl: () => Promise.resolve('')
-  };
+  }));
 
-  // ── e.member (消息事件也可能被访问) ──
-  e.member = {
+  defineLazy(e, 'member', () => ({
     user_id: userId,
     card: userName,
     nickname: userName,
@@ -271,16 +330,15 @@ export function createYunzaiEvent(event: EventsEnum) {
     is_owner: false,
     _info: { card: userName, nickname: userName },
     getAvatarUrl: () => Promise.resolve('')
-  };
+  }));
 
-  // ── e.runtime (渲染器接口桩) ──
-  e.runtime = {
-    render: async (plugin: string, tpl: string, data: any = {}, cfg: any = {}) => {
+  defineLazy(e, 'runtime', () => ({
+    render: async (pluginName: string, tpl: string, data: any = {}, cfg: any = {}) => {
       try {
         const pup = (globalThis as any).puppeteer ?? (await import('../puppeteer/puppeteer')).default;
 
         if (pup?.screenshot) {
-          const img = await pup.screenshot(`${plugin}/${tpl}`, { ...data, ...cfg });
+          const img = await pup.screenshot(`${pluginName}/${tpl}`, { ...data, ...cfg });
 
           if (cfg?.retType === 'base64') {
             return img;
@@ -302,7 +360,7 @@ export function createYunzaiEvent(event: EventsEnum) {
     handler: null,
     user: null,
     cfg: (globalThis as any).cfg ?? {}
-  };
+  }));
 
   // ── 按事件类型填充分类字段 ──
   if (noticeInfo) {
@@ -312,18 +370,6 @@ export function createYunzaiEvent(event: EventsEnum) {
     e.operator_id = userId;
     e.message_type = isGroup ? 'group' : 'private';
     e.logText = `[Notice:${noticeInfo.notice_type}:${groupId ?? userId}]`;
-
-    // notice 事件插件可能访问 e.member
-    e.member = {
-      user_id: userId,
-      card: userName,
-      nickname: userName,
-      role: 'member',
-      is_admin: false,
-      is_owner: false,
-      _info: { card: userName, nickname: userName },
-      getAvatarUrl: () => Promise.resolve('')
-    };
   } else if (requestInfo) {
     e.post_type = 'request';
     e.request_type = requestInfo.request_type;

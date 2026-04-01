@@ -75,6 +75,21 @@ export class YunzaiPlugin {
 
     contextMap.set(key, ctx);
 
+    // 防止 contextMap 无限增长
+    if (contextMap.size > 1000) {
+      const oldest = contextMap.keys().next().value;
+
+      if (oldest) {
+        contextMap.delete(oldest);
+        const t = contextTimers.get(oldest);
+
+        if (t) {
+          clearTimeout(t);
+          contextTimers.delete(oldest);
+        }
+      }
+    }
+
     if (time > 0) {
       const timer = setTimeout(() => {
         contextMap.delete(key);
@@ -221,29 +236,9 @@ export class YunzaiPlugin {
    * 签名: renderImg(plugin, tpl, data, cfg?)
    * 兼容 Miao-Yunzai 中 Apps 基类的 this.renderImg()
    */
-  async renderImg(plugin: string, tpl: string, data: any = {}, cfg: any = {}): Promise<any> {
+  renderImg(plugin: string, tpl: string, data: any = {}, cfg: any = {}): Promise<any> | false {
     if (this.e?.runtime?.render) {
       return this.e.runtime.render(plugin, tpl, data, cfg);
-    }
-
-    try {
-      const pup = (globalThis as any).puppeteer ?? (await import('../puppeteer/puppeteer')).default;
-
-      if (pup?.screenshot) {
-        const img = await pup.screenshot(`${plugin}/${tpl}`, { ...data, ...cfg });
-
-        if (cfg?.retType === 'base64') {
-          return img;
-        }
-
-        if (img) {
-          await this.reply(img);
-        }
-
-        return img;
-      }
-    } catch (err: any) {
-      console.error(`[${this.name}] renderImg 失败:`, err.message);
     }
 
     return false;
