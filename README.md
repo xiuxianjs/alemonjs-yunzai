@@ -1,6 +1,6 @@
 # 阿柠檬-Yunzai胶水层
 
-它可以加载 Yunzai 风格的插件（不再依赖 Miao-Yunzai 运行时）
+它可以加载 Yunzai 风格的插件（不依赖Yunzai运行时）
 
 什么人适合用这个仓库？
 
