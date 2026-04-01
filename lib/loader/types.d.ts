@@ -17,11 +17,18 @@ export interface PluginEntry {
     filePath: string;
 }
 export interface MessageSegment {
-    type: 'text' | 'image' | 'at' | 'face' | 'record' | 'video' | 'file' | 'json' | 'xml';
+    type: 'text' | 'image' | 'at' | 'face' | 'record' | 'video' | 'file' | 'json' | 'xml' | 'button';
     text?: string;
     qq?: string | number;
     url?: string;
     file?: string | Buffer;
     data?: any;
+    buttons?: ButtonItem[];
     [key: string]: any;
+}
+export interface ButtonItem {
+    text: string;
+    input?: string;
+    callback?: string;
+    link?: string;
 }

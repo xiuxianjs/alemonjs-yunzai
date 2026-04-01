@@ -28,6 +28,10 @@ export declare class YunzaiPlugin {
     getContext(type?: string, isGroup?: boolean): any;
     finish(type: string, isGroup?: boolean): void;
     conKey(isGroup?: boolean): string;
+    awaitContext(...args: any[]): Promise<any>;
+    resolveContext(context: any): void;
+    makeForwardMsg(title: string, msg?: any, end?: string, resmsg?: string): Promise<any> | string;
+    renderImg(plugin: string, tpl: string, data?: any, cfg?: any): Promise<any>;
 }
 export declare function findContext(e: any): {
     pluginName: string;

@@ -1,12 +1,16 @@
-# 阿柠檬-Yunzai翻译器
+# 阿柠檬-Yunzai胶水层
 
-这是一个 AlemonJS 到插件包，它可以加载 Yunzai 风格的插件（不依赖完整的 Miao-Yunzai 运行时）
+它可以加载 Yunzai 风格的插件（不依赖Yunzai运行时）
 
-什么人适合用这个仓库？
+适合用这个仓库的是？
 
 - 立即快速兼容的开发者。
 
 - 追求功能简洁性的朋友。
+
+不适合用这个仓库的是？
+
+- 严重依靠Yunzai米游API的插件
 
 ## 安装说明
 
@@ -23,10 +27,6 @@ https://github.com/xiuxianjs/alemonjs-yunzai.git
 ```sh
 release
 ```
-
-### 对于其他插件
-
-branch 选择 `main` 或 `master`，而不是 `release`, 对于一般的Yunzai插件来说
 
 ## 管理指令
 
@@ -51,19 +51,7 @@ master_key:
 
 ## 对于开发者
 
-```ts
-import { YunzaiPlugin, segment, loader, createYunzaiEvent } from 'alemonjs-yunzai';
-```
-
-可用导出：
-
-| 导出                | 说明                                        |
-| ------------------- | ------------------------------------------- |
-| `YunzaiPlugin`      | 插件基类，等同于 Yunzai 的 `plugin`         |
-| `segment`           | 消息构建工具（text / image / at / face 等） |
-| `loader`            | 全局插件加载器单例                          |
-| `createYunzaiEvent` | AlemonJS 事件 → Yunzai `e` 对象适配器       |
-| `PluginLoader`      | 加载器类（通常使用 `loader` 单例即可）      |
+[README_DEV.md](./README_DEV.md)
 
 ## 免责声明
 

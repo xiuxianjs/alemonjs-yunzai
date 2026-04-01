@@ -1,4 +1,4 @@
-import type { MessageSegment } from './types';
+import type { ButtonItem, MessageSegment } from './types';
 export declare const segment: {
     text(text: string): MessageSegment;
     at(qq: string | number, text?: string): MessageSegment;
@@ -8,4 +8,5 @@ export declare const segment: {
     video(file: string): MessageSegment;
     json(data: any): MessageSegment;
     xml(data: string): MessageSegment;
+    button(buttons: ButtonItem[]): MessageSegment;
 };

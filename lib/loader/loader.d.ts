@@ -4,7 +4,7 @@ export declare class PluginLoader {
     private pluginsDir;
     constructor(pluginsDir: string);
     get pluginCount(): number;
-    setupGlobals(): void;
+    setupGlobals(): Promise<void>;
     load(): Promise<void>;
     private static YUNZAI_PATTERNS;
     private isYunzaiFile;
@@ -13,6 +13,8 @@ export declare class PluginLoader {
     private isPluginClass;
     deal(e: any): Promise<boolean>;
     reload(): Promise<void>;
+    private collectTasks;
+    private clearTasks;
     private matchEvent;
     getPluginList(): {
         name: string;
